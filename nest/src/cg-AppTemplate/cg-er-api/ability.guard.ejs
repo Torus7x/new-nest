@@ -1,0 +1,56 @@
+import {
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { AbilityFactory } from './ability.factory';
+import { CHECK_ABILITY, RequiredRule } from './ability.decorator';
+import { ForbiddenError } from '@casl/ability';
+import { JwtServices } from 'src/jwt.service';
+
+@Injectable()
+export class AbilitiesGuard implements CanActivate {
+  constructor(
+    private reflector: Reflector,
+    private caslabilityFactory: AbilityFactory,
+    private readonly jwtService:JwtServices
+  ) { }
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const rules =
+      this.reflector.get<RequiredRule[]>(CHECK_ABILITY, context.getHandler()) ||
+      [];
+
+    const request = context.switchToHttp().getRequest();
+    const token = request.headers.authorization.split(' ')[1];
+    const decodedToken = this.jwtService.decodeToken(token);
+    
+    const details = request.headers;
+    const tenant = details.tenant;
+    const appGroup = details.appgroup;
+    const rkey = details.rkey;
+    const rKeyParts = rkey.split(':');
+    const appName = rKeyParts[2];
+    const userRole = decodedToken.realm_access.roles;
+    const ability = this.caslabilityFactory.defineAbility(tenant, appGroup, appName, userRole);
+
+    if(!tenant && !appGroup && !appName && !userRole){
+      return false
+    }
+    else
+    {
+    try {
+      rules.forEach((rule) => {
+        ForbiddenError.from(ability).throwUnlessCan(rule.action, rule.subject)
+      });
+      return true;
+    } catch (error) {
+      if (error instanceof ForbiddenError) {
+        throw new ForbiddenException(error.message);
+      }
+    }
+  }
+}
+}
